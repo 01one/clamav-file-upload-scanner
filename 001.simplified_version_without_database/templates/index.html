@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClamAV Integration for Automated Security Scanning and Safe File Upload Handling</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+
+<body class="bg-gray-50">
+    <div class="max-w-3xl mx-auto my-12 p-6 bg-white rounded-lg shadow-md">
+        <h2 class="text-2xl font-bold mb-6 text-gray-800 flex items-center">
+            <i class="fas fa-share-alt mr-3 text-blue-500"></i> ClamAV Integration for Automated Security Scanning and Safe File Upload Handling
+        </h2>
+
+        <div id="drag-drop-area" class="border-2 border-dashed border-gray-300 rounded-lg p-8 mb-6 text-center transition-all hover:border-blue-400">
+            <p class="text-gray-600 mb-3">Drag files here or click to select</p>
+            <label for="file-upload" class="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition cursor-pointer inline-flex items-center">
+                <i class="fas fa-file-upload mr-2"></i> Choose File
+            </label>
+            <input type="file" id="file-upload" class="hidden"
+                accept=".pdf, .docx, .doc, .xls, .xlsx, .ppt, .pptx, .jpg, .jpeg, .png, .gif, .zip, .7z, .apk">
+            <div id="file-name" class="mt-3 font-medium text-gray-700"></div>
+
+            <div class="w-full bg-gray-200 rounded-full h-5 mt-4">
+                <div id="progress-bar" class="bg-blue-500 h-5 rounded-full transition-all" style="width: 0%"></div>
+            </div>
+            <div id="upload-status" class="mt-2 text-blue-500 text-sm"></div>
+        </div>
+
+        <div id="status-messages" class="hidden mb-6 p-4 rounded-md"></div>
+
+        <h4 class="text-xl font-medium mb-3 text-gray-800 flex items-center">
+            <i class="fas fa-file-alt mr-2 text-blue-500"></i> Available Files
+        </h4>
+        <ul id="fileList" class="mb-6 divide-y divide-gray-200 border rounded-md">
+            <li id="no-files-message" class="p-3 text-gray-500 italic">No files available</li>
+        </ul>
+
+        <div class="bg-blue-50 border-l-4 border-blue-500 p-4 rounded-md">
+            <p class="text-blue-700 text-sm flex items-start">
+                <i class="fas fa-info-circle mt-1 mr-2"></i>
+                <span>Supported file formats: PDF, Word, Excel, PowerPoint, Images (JPG, PNG, GIF), Archives (ZIP, 7Z), and APK</span>
+            </p>
+        </div>
+    </div>
+
+    <input type="hidden" id="csrf-token" value="{{ csrf_token }}">
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.4/jquery.min.js"></script>
+
+    <script>
+document.addEventListener("DOMContentLoaded", function() {
+    fetchFileList();
+});
+
+const baseURL = `${window.location.protocol}//${window.location.host}`;
+const fileUploadURL = baseURL + "/upload";
+const fileListURL = baseURL + "/files";
+const fileDeleteURL = baseURL + "/delete/";
+const fileDownloadURL = baseURL + "/download/";
+
+function getCsrfToken() {
+    return document.getElementById('csrf-token').value;
+}
+
+const dragDropArea = document.getElementById('drag-drop-area');
+
+dragDropArea.addEventListener('dragover', function(e) {
+    e.preventDefault();
+    this.classList.add('border-blue-500', 'bg-blue-50');
+});
+
+dragDropArea.addEventListener('dragleave', function() {
+    this.classList.remove('border-blue-500', 'bg-blue-50');
+});
+
+dragDropArea.addEventListener('drop', function(e) {
+    e.preventDefault();
+    this.classList.remove('border-blue-500', 'bg-blue-50');
+    if (e.dataTransfer.files.length > 0) {
+        const file = e.dataTransfer.files[0];
+        handleFileUpload(file);
+    }
+});
+
+document.getElementById('file-upload').addEventListener('change', function(e) {
+    if (e.target.files.length > 0) {
+        const file = e.target.files[0];
+        handleFileUpload(file);
+    }
+});
+
+function handleFileUpload(file) {
+    const progressBar = document.getElementById('progress-bar');
+    progressBar.style.width = '0%';
+
+    const fileName = file.name;
+    document.getElementById('file-name').innerText = fileName;
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('_xsrf', getCsrfToken());
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', fileUploadURL, true);
+    xhr.setRequestHeader('X-XSRFToken', getCsrfToken());
+
+    xhr.upload.onprogress = function(event) {
+        if (event.lengthComputable) {
+            const percentComplete = (event.loaded / event.total) * 100;
+            progressBar.style.width = percentComplete + '%';
+
+            let uploadedSize = (event.loaded / 1024).toFixed(2);
+            let totalSize = (event.total / 1024).toFixed(2);
+            let sizeUnit = 'KB';
+
+            if (uploadedSize >= 1024) {
+                uploadedSize = (uploadedSize / 1024).toFixed(2);
+                totalSize = (totalSize / 1024).toFixed(2);
+                sizeUnit = 'MB';
+            }
+
+            document.getElementById('upload-status').innerText =
+                `Uploading: ${uploadedSize} of ${totalSize} ${sizeUnit} (${percentComplete.toFixed(1)}%)`;
+        }
+    };
+
+    xhr.onloadstart = function() {
+        document.getElementById('upload-status').innerText = "Uploading file...";
+    };
+
+    xhr.upload.onload = function() {
+        document.getElementById('upload-status').innerHTML = '<span class="flex items-center"><i class="fas fa-shield-alt mr-2"></i>Scanning file for security threats...</span>';
+        showStatusMessage(
+            createScanResultHTML(
+                "Security Scan in Progress",
+                "info",
+                "Running comprehensive security scan on the uploaded file...",
+                ["Please wait while we verify this file is safe"]
+            ),
+            'info'
+        );
+    };
+
+    xhr.onload = function() {
+        if (xhr.status === 200) {
+            try {
+                const response = JSON.parse(xhr.responseText);
+                const scanResult = response.scan_result || {};
+
+                if (scanResult.safe) {
+                    showStatusMessage(
+                        createScanResultHTML(
+                            "File Security Scan Complete",
+                            "success",
+                            scanResult.message || "File verified as safe",
+                            scanResult.details || []
+                        ),
+                        'success'
+                    );
+                } else {
+                    showStatusMessage(
+                        createScanResultHTML(
+                            "File Security Scan Warning",
+                            "warning",
+                            scanResult.message || "Security check incomplete",
+                            scanResult.details || []
+                        ),
+                        'warning'
+                    );
+                }
+            } catch (e) {
+                showStatusMessage(createScanResultHTML("Upload Completed", "success", "File uploaded successfully"), 'success');
+            }
+            document.getElementById('file-upload').value = '';
+            fetchFileList();
+        } else {
+            try {
+                const response = JSON.parse(xhr.responseText);
+                let title = "Upload Failed";
+                let message = response.error || "File upload failed";
+                let details = [];
+
+                if (response.scan_result) {
+                    message = response.scan_result.message || "File failed security check";
+                    details = response.scan_result.details || [];
+                }
+
+                showStatusMessage(createScanResultHTML(title, "error", message, details), 'error');
+            } catch (e) {
+                showStatusMessage(createScanResultHTML("Upload Failed", "error", "File upload failed"), 'error');
+            }
+        }
+
+        document.getElementById('upload-status').innerText = "";
+    };
+
+    xhr.onerror = function() {
+        showStatusMessage(createScanResultHTML("Network Error", "error", "Connection failed during upload"), 'error');
+        document.getElementById('upload-status').innerHTML = '<span class="text-red-500">Connection lost</span>';
+    };
+
+    xhr.ontimeout = function() {
+        showStatusMessage(createScanResultHTML("Timeout Error", "error", "Server took too long to respond"), 'error');
+        document.getElementById('upload-status').innerHTML = '<span class="text-red-500">Connection timed out</span>';
+    };
+
+    xhr.onabort = function() {
+        showStatusMessage(createScanResultHTML("Upload Cancelled", "warning", "File upload was cancelled"), 'warning');
+        document.getElementById('upload-status').innerHTML = '';
+    };
+
+    xhr.send(formData);
+}
+
+function createScanResultHTML(title, type, message, details = []) {
+    let iconClass, textColor;
+
+    switch (type) {
+        case 'success':
+            iconClass = 'fa-check-circle';
+            textColor = 'text-green-700';
+            break;
+        case 'warning':
+            iconClass = 'fa-exclamation-triangle';
+            textColor = 'text-yellow-700';
+            break;
+        case 'error':
+            iconClass = 'fa-times-circle';
+            textColor = 'text-red-700';
+            break;
+        case 'info':
+            iconClass = 'fa-shield-alt';
+            textColor = 'text-blue-700';
+            break;
+        default:
+            iconClass = 'fa-info-circle';
+            textColor = 'text-blue-700';
+    }
+
+    let html = `
+        <div class="flex items-start">
+            <div class="mr-3 text-xl ${textColor}">
+                <i class="fas ${iconClass}"></i>
+            </div>
+            <div class="flex-1">
+                <h4 class="font-bold text-gray-800 mb-1">${title}</h4>
+                <p class="${textColor} font-medium">${message}</p>
+    `;
+
+    if (details && details.length > 0) {
+        html += `<div class="mt-2 text-sm text-gray-600">`;
+        html += `<p class="font-medium mb-1">Security scan details:</p>`;
+        html += `<ul class="list-disc pl-5 space-y-1">`;
+        details.forEach(detail => {
+            html += `<li>${detail}</li>`;
+        });
+        html += `</ul></div>`;
+    }
+
+    html += `</div></div>`;
+    return html;
+}
+
+function showStatusMessage(messageHTML, type) {
+    const statusContainer = document.getElementById('status-messages');
+
+    let bgColor, borderColor;
+    switch (type) {
+        case 'success':
+            bgColor = 'bg-green-50';
+            borderColor = 'border-green-500';
+            break;
+        case 'warning':
+            bgColor = 'bg-yellow-50';
+            borderColor = 'border-yellow-500';
+            break;
+        case 'error':
+            bgColor = 'bg-red-50';
+            borderColor = 'border-red-500';
+            break;
+        case 'info':
+            bgColor = 'bg-blue-50';
+            borderColor = 'border-blue-500';
+            break;
+        default:
+            bgColor = 'bg-blue-50';
+            borderColor = 'border-blue-500';
+    }
+
+    statusContainer.className = `${bgColor} border-l-4 ${borderColor} p-4 rounded-md mb-6`;
+    statusContainer.innerHTML = messageHTML;
+    statusContainer.classList.remove('hidden');
+
+    const timeout = (type === 'error' || type === 'warning') ? 15000 : 8000;
+    setTimeout(() => {
+        statusContainer.classList.add('hidden');
+    }, timeout);
+}
+
+function fetchFileList() {
+    const url = new URL(fileListURL, window.location.origin);
+    url.searchParams.append('_xsrf', getCsrfToken());
+
+    fetch(url, {
+        method: 'GET',
+        headers: {
+            'X-XSRFToken': getCsrfToken(),
+        },
+        credentials: 'same-origin'
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error("Network response was not ok");
+        }
+        return response.json();
+    })
+    .then(data => {
+        const fileList = document.getElementById("fileList");
+        const noFilesMessage = document.getElementById("no-files-message");
+
+        fileList.innerHTML = "";
+
+        if (!data.files || data.files.length === 0) {
+            fileList.appendChild(noFilesMessage);
+            return;
+        }
+
+        data.files.forEach(file => {
+            const listItem = document.createElement("li");
+            listItem.className = "p-3 flex justify-between items-center hover:bg-gray-50";
+
+            const downloadUrl = new URL(`${fileDownloadURL}${encodeURIComponent(file.filename)}`, window.location.origin);
+            downloadUrl.searchParams.append('_xsrf', getCsrfToken());
+
+            const link = document.createElement("a");
+            link.href = downloadUrl.toString();
+            link.className = "text-blue-600 hover:text-blue-800 truncate flex-1";
+            link.textContent = file.original_name;
+
+            const fileSizeElement = document.createElement("span");
+            fileSizeElement.className = "text-gray-500 text-sm mx-2";
+            fileSizeElement.textContent = formatFileSize(file.size);
+
+            const deleteButton = document.createElement("button");
+            deleteButton.className = "ml-4 text-red-600 hover:text-red-800 p-1 rounded hover:bg-red-50";
+            deleteButton.innerHTML = '<i class="fas fa-trash"></i>';
+            deleteButton.title = "Delete file";
+            deleteButton.onclick = function() {
+                deleteFile(file.filename);
+            };
+
+            listItem.appendChild(link);
+            listItem.appendChild(fileSizeElement);
+            listItem.appendChild(deleteButton);
+            fileList.appendChild(listItem);
+        });
+    })
+    .catch(error => {
+        console.error("Error fetching files:", error);
+        showStatusMessage(createScanResultHTML("Error", "error", "Failed to load file list"), 'error');
+    });
+}
+
+function formatFileSize(bytes) {
+    if (bytes < 1024) {
+        return bytes + ' B';
+    } else if (bytes < 1024 * 1024) {
+        return (bytes / 1024).toFixed(1) + ' KB';
+    } else if (bytes < 1024 * 1024 * 1024) {
+        return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    } else {
+        return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+    }
+}
+
+function deleteFile(filename) {
+    if (confirm(`Are you sure you want to delete ${filename}?`)) {
+        // Create a URL with query parameters properly appended
+        const url = new URL(`${fileDeleteURL}${encodeURIComponent(filename)}`, window.location.origin);
+        url.searchParams.append('_xsrf', getCsrfToken());
+
+        fetch(url, {
+            method: 'DELETE',
+            headers: {
+                'X-XSRFToken': getCsrfToken(),
+            },
+            credentials: 'same-origin'
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Failed to delete file');
+            }
+            return response.json();
+        })
+        .then(data => {
+            showStatusMessage(createScanResultHTML("File Deleted", "success", `File removed successfully`), 'success');
+            fetchFileList();
+        })
+        .catch(error => {
+            console.error('Error deleting file:', error);
+            showStatusMessage(createScanResultHTML("Error", "error", "Failed to delete file"), 'error');
+        });
+    }
+} </script>
+</body>
+
+</html>
